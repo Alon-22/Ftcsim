@@ -27,6 +27,7 @@ import { ControlsPanel } from './components/ControlsPanel.js';
 import { MechanismPanel } from './components/MechanismPanel.js';
 import { RobotBuilder } from './components/RobotBuilder.js';
 import { PresetPanel } from './components/PresetPanel.js';
+import { GameMenu } from './components/GameMenu.js';
 import { PresetRepository } from '../storage/presets.js';
 import { createStore } from '../storage/kvStore.js';
 import type { RobotConfig } from '../core/robot/robotConfig.js';
@@ -40,7 +41,7 @@ export function App() {
   const [driveMode, setDriveMode] = useState<DriveMode>(DEFAULT_DRIVE_MODE);
   const [driveModeReady, setDriveModeReady] = useState(false);
   const [robotConfig, setRobotConfig] = useState<RobotConfig>(COMPETITION_ROBOT_CONFIG);
-  const [view, setView] = useState<'play' | 'configure' | 'controls'>('play');
+  const [view, setView] = useState<'menu' | 'play' | 'configure' | 'controls'>('play');
   const [showDebug, setShowDebug] = useState(false);
   const [telemetry, setTelemetry] = useState<TelemetrySample | null>(null);
   const [stats, setStats] = useState<RunnerStats | null>(null);
@@ -150,6 +151,12 @@ export function App() {
     [runner, gameEntry],
   );
 
+  /** Picking a game from the menu loads it and takes the driver straight into Play. */
+  const selectGame = useCallback((gameId: string) => {
+    setSelectedGameId(gameId);
+    setView('play');
+  }, []);
+
   useEffect(() => {
     keyboard.setBindings(bindings);
   }, [keyboard, bindings]);
@@ -161,6 +168,16 @@ export function App() {
   useEffect(() => {
     runner.setRenderOptions(renderOptions);
   }, [runner, renderOptions]);
+
+  // The canvas unmounts while the Games menu is showing (it has no field to
+  // draw), so re-attach it whenever a canvas-bearing view comes back — the
+  // main lifecycle effect below only attaches once on mount and would
+  // otherwise keep pointing at a canvas that no longer exists in the DOM.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (canvas === null) return;
+    runner.attach(canvas);
+  }, [runner, view]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -194,6 +211,7 @@ export function App() {
       <header className="app-header">
         <div className="brand"><span className="brand-mark">FTC</span><h1>Simulator</h1><span>{gameEntry.definition.name} · {gameEntry.definition.season}</span></div>
         <nav className="app-nav" aria-label="Main navigation">
+          <button type="button" className={view === 'menu' ? 'is-selected' : ''} onClick={() => setView('menu')}>Games</button>
           <button type="button" className={view === 'play' ? 'is-selected' : ''} onClick={() => setView('play')}>Play</button>
           <button type="button" className={view === 'configure' ? 'is-selected' : ''} onClick={() => setView('configure')}>Configure</button>
           <button type="button" className={view === 'controls' ? 'is-selected' : ''} onClick={() => setView('controls')}>Controls</button>
@@ -201,113 +219,103 @@ export function App() {
         <span className="made-by">Made by 10298 Brain Stormz</span>
       </header>
 
-      <main className={`app-main ${view === 'configure' ? 'is-configure' : ''}`}>
-        <div className="field-column">
-          <div className="canvas-wrap">
-            <canvas ref={canvasRef} className="field-canvas" />
-          </div>
-          <MatchPanel game={gameEntry.definition} status={match} />
+      {view === 'menu' ? (
+        <main className="app-main app-main-menu">
+          <GameMenu games={GAME_REGISTRY} selectedGameId={selectedGameId} onSelect={selectGame} />
+        </main>
+      ) : (
+        <main className={`app-main ${view === 'configure' ? 'is-configure' : ''}`}>
+          <div className="field-column">
+            <div className="canvas-wrap">
+              <canvas ref={canvasRef} className="field-canvas" />
+            </div>
+            <MatchPanel game={gameEntry.definition} status={match} />
 
-          <div className="field-toolbar">
-            <button type="button" onClick={() => runner.reset(robotConfig)}>Restart match</button>
-            {GAME_REGISTRY.length > 1 && (
+            <div className="field-toolbar">
+              <button type="button" onClick={() => runner.reset(robotConfig)}>Restart match</button>
               <label>
-                Game
+                Team
                 <select
-                  aria-label="Game"
-                  value={selectedGameId}
-                  onChange={(event) => setSelectedGameId(event.target.value)}
+                  aria-label="Driver alliance"
+                  value={driverAlliance}
+                  onChange={(event) => selectAlliance(event.target.value as 'red' | 'blue')}
                 >
-                  {GAME_REGISTRY.map((entry) => (
-                    <option key={entry.definition.id} value={entry.definition.id}>
-                      {entry.definition.name}
-                    </option>
-                  ))}
+                  <option value="red">Red alliance</option>
+                  <option value="blue">Blue alliance</option>
                 </select>
               </label>
-            )}
-            <label>
-              Team
-              <select
-                aria-label="Driver alliance"
-                value={driverAlliance}
-                onChange={(event) => selectAlliance(event.target.value as 'red' | 'blue')}
-              >
-                <option value="red">Red alliance</option>
-                <option value="blue">Blue alliance</option>
-              </select>
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={renderOptions.showGrid}
-                onChange={(event) =>
-                  setRenderOptions({ ...renderOptions, showGrid: event.target.checked })
-                }
-              />
-              Grid
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={renderOptions.showVelocity}
-                onChange={(event) =>
-                  setRenderOptions({ ...renderOptions, showVelocity: event.target.checked })
-                }
-              />
-              Velocity
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={renderOptions.showGameGeometry === true}
-                onChange={(event) =>
-                  setRenderOptions({ ...renderOptions, showGameGeometry: event.target.checked })
-                }
-              />
-              Debug field geometry
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={renderOptions.showGeometryLabels === true}
-                onChange={(event) =>
-                  setRenderOptions({ ...renderOptions, showGeometryLabels: event.target.checked })
-                }
-              />
-              Labels
-            </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={renderOptions.showGrid}
+                  onChange={(event) =>
+                    setRenderOptions({ ...renderOptions, showGrid: event.target.checked })
+                  }
+                />
+                Grid
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={renderOptions.showVelocity}
+                  onChange={(event) =>
+                    setRenderOptions({ ...renderOptions, showVelocity: event.target.checked })
+                  }
+                />
+                Velocity
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={renderOptions.showGameGeometry === true}
+                  onChange={(event) =>
+                    setRenderOptions({ ...renderOptions, showGameGeometry: event.target.checked })
+                  }
+                />
+                Debug field geometry
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={renderOptions.showGeometryLabels === true}
+                  onChange={(event) =>
+                    setRenderOptions({ ...renderOptions, showGeometryLabels: event.target.checked })
+                  }
+                />
+                Labels
+              </label>
+            </div>
+
+            <p className="muted small field-note">Solo driver practice · {driverAlliance} alliance · 12 ft × 12 ft</p>
           </div>
 
-          <p className="muted small field-note">Solo driver practice · {driverAlliance} alliance · 12 ft × 12 ft</p>
-        </div>
-
-        {view === 'play' ? (
-          <aside className="side-column play-sidebar">
-            <MechanismPanel sample={telemetry} />
-            <VirtualGamepad source={virtualPad} />
-            <button type="button" className="debug-toggle" onClick={() => setShowDebug(!showDebug)}>
-              {showDebug ? 'Hide engineering telemetry' : 'Show engineering telemetry'}
-            </button>
-            {showDebug && <TelemetryPanel sample={telemetry} stats={stats} />}
-          </aside>
-        ) : view === 'configure' ? (
-          <aside className="side-column configure-sidebar">
-            <RobotBuilder key={robotConfig.id} applied={robotConfig} onApply={applyRobot} />
-            <PresetPanel repository={presets} current={robotConfig} onLoad={applyRobot} />
-          </aside>
-        ) : (
-          <aside className="side-column configure-sidebar">
-            <ControlsPanel
-              bindings={bindings}
-              onChange={setBindings}
-              gamepadConnected={gamepadConnected}
-              driveMode={driveMode}
-              onDriveModeChange={setDriveMode}
-            />
-          </aside>
-        )}
-      </main>
+          {view === 'play' ? (
+            <aside className="side-column play-sidebar">
+              <MechanismPanel sample={telemetry} />
+              <VirtualGamepad source={virtualPad} />
+              <button type="button" className="debug-toggle" onClick={() => setShowDebug(!showDebug)}>
+                {showDebug ? 'Hide engineering telemetry' : 'Show engineering telemetry'}
+              </button>
+              {showDebug && <TelemetryPanel sample={telemetry} stats={stats} />}
+            </aside>
+          ) : view === 'configure' ? (
+            <aside className="side-column configure-sidebar">
+              <RobotBuilder key={robotConfig.id} applied={robotConfig} onApply={applyRobot} />
+              <PresetPanel repository={presets} current={robotConfig} onLoad={applyRobot} />
+            </aside>
+          ) : (
+            <aside className="side-column configure-sidebar">
+              <ControlsPanel
+                bindings={bindings}
+                onChange={setBindings}
+                gamepadConnected={gamepadConnected}
+                driveMode={driveMode}
+                onDriveModeChange={setDriveMode}
+              />
+            </aside>
+          )}
+        </main>
+      )}
     </div>
   );
 }
