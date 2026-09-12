@@ -10,11 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { COMPETITION_ROBOT_CONFIG } from '../core/robot/robotConfig.js';
-import { DECODE_GAME } from '../core/game/fixtures/decodeGame.js';
-import { stageDecodePieces } from '../core/game/fixtures/decodeStaging.js';
-import { createDecodeField } from '../core/game/fixtures/decodeCollision.js';
-import { inchesToMeters } from '../core/units/convert.js';
-import { vec2 } from '../core/math/vec2.js';
+import { GAME_REGISTRY, DEFAULT_GAME_ID, getGameEntry } from '../core/game/registry.js';
 import type { TelemetrySample } from '../core/telemetry/sampler.js';
 import type { MatchStatus } from './simRunner.js';
 import { SimRunner, type RunnerStats } from './simRunner.js';
@@ -36,17 +32,6 @@ import { createStore } from '../storage/kvStore.js';
 import type { RobotConfig } from '../core/robot/robotConfig.js';
 import './styles/app.css';
 
-/**
- * Where a DECODE robot legally starts (G304, p.102): over a LAUNCH LINE,
- * touching the FIELD perimeter, and fully on its own side. The GOAL-side LAUNCH
- * ZONE's base is the whole GOAL-side wall, so this puts an 18 in robot against
- * that wall inside red's half.
- */
-const LEGAL_START_POSES = {
-  red: { p: vec2(inchesToMeters(-30), inchesToMeters(63)), theta: 0 },
-  blue: { p: vec2(inchesToMeters(30), inchesToMeters(63)), theta: 0 },
-} as const;
-
 export function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -63,30 +48,47 @@ export function App() {
   const [renderOptions, setRenderOptions] = useState<RenderOptions>(DEFAULT_RENDER_OPTIONS);
   const [gamepadConnected, setGamepadConnected] = useState(false);
   const [driverAlliance, setDriverAlliance] = useState<'red' | 'blue'>('red');
+  const [selectedGameId, setSelectedGameId] = useState<string>(DEFAULT_GAME_ID);
 
-  // Input sources and the runner are created once and live outside React's
-  // render cycle; re-creating them per render would reset the simulation.
-  const { runner, keyboard, gamepad, virtualPad } = useMemo(() => {
+  const gameEntry = useMemo(() => getGameEntry(selectedGameId), [selectedGameId]);
+
+  // Input sources live outside React's render cycle and are created once; they
+  // do not depend on which game is selected.
+  const { keyboard, gamepad, virtualPad, inputHub } = useMemo(() => {
     const keyboardSource = new KeyboardSource(DEFAULT_KEY_BINDINGS);
     const gamepadSource = new GamepadSource();
     const virtualSource = new VirtualPadSource();
     const hub = new InputHub([virtualSource, gamepadSource, keyboardSource]);
 
     return {
-      runner: new SimRunner(
-        COMPETITION_ROBOT_CONFIG,
-        hub,
-        DECODE_GAME,
-        LEGAL_START_POSES.red,
-        stageDecodePieces(),
-        1,
-        createDecodeField(),
-      ),
       keyboard: keyboardSource,
       gamepad: gamepadSource,
       virtualPad: virtualSource,
+      inputHub: hub,
     };
   }, []);
+
+  // The runner is rebuilt whenever the selected game changes — a different
+  // game means different rules, field geometry and staged pieces, so this is
+  // a fresh world rather than something `reset()` can carry across.
+  const runner = useMemo(
+    () =>
+      new SimRunner(
+        COMPETITION_ROBOT_CONFIG,
+        inputHub,
+        gameEntry.definition,
+        gameEntry.legalStartPoses[driverAlliance],
+        gameEntry.stagePieces(),
+        1,
+        gameEntry.createField(),
+        driverAlliance,
+      ),
+    // Recreated only when the game changes. `driverAlliance` seeds the initial
+    // start pose here; changing alliance afterwards goes through
+    // `selectAlliance`, which calls `runner.setAlliance` on the existing runner
+    // rather than rebuilding it, so it is deliberately not a dependency here.
+    [gameEntry, inputHub],
+  );
 
   // The repository is created once; recreating it per render would reopen the
   // database and drop the listing on every keystroke.
@@ -143,9 +145,9 @@ export function App() {
   const selectAlliance = useCallback(
     (alliance: 'red' | 'blue') => {
       setDriverAlliance(alliance);
-      runner.setAlliance(alliance, LEGAL_START_POSES[alliance]);
+      runner.setAlliance(alliance, gameEntry.legalStartPoses[alliance]);
     },
-    [runner],
+    [runner, gameEntry],
   );
 
   useEffect(() => {
@@ -190,7 +192,7 @@ export function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <div className="brand"><span className="brand-mark">FTC</span><h1>Simulator</h1><span>DECODE 2025–26</span></div>
+        <div className="brand"><span className="brand-mark">FTC</span><h1>Simulator</h1><span>{gameEntry.definition.name} · {gameEntry.definition.season}</span></div>
         <nav className="app-nav" aria-label="Main navigation">
           <button type="button" className={view === 'play' ? 'is-selected' : ''} onClick={() => setView('play')}>Play</button>
           <button type="button" className={view === 'configure' ? 'is-selected' : ''} onClick={() => setView('configure')}>Configure</button>
@@ -204,10 +206,26 @@ export function App() {
           <div className="canvas-wrap">
             <canvas ref={canvasRef} className="field-canvas" />
           </div>
-          <MatchPanel game={DECODE_GAME} status={match} />
+          <MatchPanel game={gameEntry.definition} status={match} />
 
           <div className="field-toolbar">
             <button type="button" onClick={() => runner.reset(robotConfig)}>Restart match</button>
+            {GAME_REGISTRY.length > 1 && (
+              <label>
+                Game
+                <select
+                  aria-label="Game"
+                  value={selectedGameId}
+                  onChange={(event) => setSelectedGameId(event.target.value)}
+                >
+                  {GAME_REGISTRY.map((entry) => (
+                    <option key={entry.definition.id} value={entry.definition.id}>
+                      {entry.definition.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label>
               Team
               <select
